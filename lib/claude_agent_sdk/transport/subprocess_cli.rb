@@ -134,7 +134,7 @@ module ClaudeAgentSDK
         Enumerator.new do |yielder|
           raise CLIConnectionError, "Not connected" unless @stdout && @wait_thread
 
-        json_buffer = +""
+          json_buffer = String.new
 
           begin
             @stdout.each_line do |line|
@@ -149,7 +149,7 @@ module ClaudeAgentSDK
 
                 if json_buffer.bytesize > @max_buffer_size
                   buffer_length = json_buffer.bytesize
-                  json_buffer = ""
+                  json_buffer.clear
                   raise CLIJSONDecodeError.new(
                     "JSON message exceeded maximum buffer size of #{@max_buffer_size} bytes",
                     StandardError.new("Buffer size #{buffer_length} exceeds limit #{@max_buffer_size}"),
@@ -158,7 +158,7 @@ module ClaudeAgentSDK
 
                 begin
                   data = JSON.parse(json_buffer)
-                  json_buffer = ""
+                  json_buffer.clear
                   yielder << data
                 rescue JSON::ParserError
                   next
