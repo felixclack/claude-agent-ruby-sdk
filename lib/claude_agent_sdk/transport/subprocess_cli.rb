@@ -292,8 +292,11 @@ module ClaudeAgentSDK
             begin
               settings_obj = JSON.parse(settings_str)
             rescue JSON::ParserError
+              warn("Failed to parse settings as JSON, treating as file path: #{settings_str}")
               if File.file?(settings_str)
                 settings_obj = JSON.parse(File.read(settings_str))
+              else
+                warn("Settings file not found: #{settings_str}")
               end
             end
           elsif File.file?(settings_str)

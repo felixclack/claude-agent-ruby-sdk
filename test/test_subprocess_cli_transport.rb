@@ -155,6 +155,20 @@ class TestSubprocessCLITransport < Minitest::Test
     file.unlink if file
   end
 
+  def test_build_settings_value_invalid_json_warns
+    options = build_options(settings: "{not json}", sandbox: { "enabled" => true })
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    settings = nil
+    stderr_output = capture_io do
+      settings = transport.send(:build_settings_value)
+    end.last
+
+    assert_includes stderr_output, "Failed to parse settings as JSON"
+    assert_includes stderr_output, "Settings file not found"
+    assert_equal true, JSON.parse(settings).dig("sandbox", "enabled")
+  end
+
   def test_optimize_command_length_uses_tempfile
     options = build_options
     transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
@@ -540,9 +554,13 @@ class TestSubprocessCLITransport < Minitest::Test
 
     File.stub(:file?, true) do
       File.stub(:read, JSON.generate({ "x" => 1 })) do
-        settings = transport.send(:build_settings_value)
-        parsed = JSON.parse(settings)
-        assert_equal 1, parsed["x"]
+        warnings = []
+        transport.stub(:warn, proc { |msg| warnings << msg }) do
+          settings = transport.send(:build_settings_value)
+          parsed = JSON.parse(settings)
+          assert_equal 1, parsed["x"]
+        end
+        assert warnings.any? { |msg| msg.include?("Failed to parse settings as JSON") }
       end
     end
   end
