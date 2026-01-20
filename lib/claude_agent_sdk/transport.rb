@@ -22,6 +22,10 @@ module ClaudeAgentSDK
       raise NotImplementedError, "ready? must be implemented"
     end
 
+    def is_ready
+      ready?
+    end
+
     def end_input
       raise NotImplementedError, "end_input must be implemented"
     end

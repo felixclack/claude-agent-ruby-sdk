@@ -11,6 +11,7 @@ class TestTransportBase < Minitest::Test
     assert_raises(NotImplementedError) { transport.read_messages }
     assert_raises(NotImplementedError) { transport.close }
     assert_raises(NotImplementedError) { transport.ready? }
+    assert_raises(NotImplementedError) { transport.is_ready }
     assert_raises(NotImplementedError) { transport.end_input }
   end
 end
