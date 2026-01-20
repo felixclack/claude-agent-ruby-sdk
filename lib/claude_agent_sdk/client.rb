@@ -4,6 +4,8 @@ require "json"
 
 module ClaudeAgentSDK
   class ClaudeSDKClient
+    attr_reader :options
+
     def initialize(options: nil, transport: nil)
       @options = options || ClaudeAgentOptions.new
       @custom_transport = transport
@@ -24,7 +26,7 @@ module ClaudeAgentSDK
           raise ArgumentError, "can_use_tool callback cannot be used with permission_prompt_tool_name. Please use one or the other."
         end
 
-        options = @options.with(permission_prompt_tool_name: "stdio")
+        options = @options.merge(permission_prompt_tool_name: "stdio")
       else
         options = @options
       end
@@ -59,6 +61,19 @@ module ClaudeAgentSDK
       if !prompt.nil? && prompt.respond_to?(:each)
         Thread.new { @query.stream_input(prompt) }
       end
+
+      self
+    end
+
+    def open(prompt: nil)
+      connect(prompt: prompt)
+      return self unless block_given?
+
+      begin
+        yield self
+      ensure
+        disconnect
+      end
     end
 
     def receive_messages
@@ -70,6 +85,14 @@ module ClaudeAgentSDK
       end
     end
 
+    def each_message(&block)
+      enum = receive_messages
+      return enum unless block
+
+      enum.each(&block)
+    end
+    alias messages each_message
+
     def receive_response
       ensure_connected!
       Enumerator.new do |yielder|
@@ -79,6 +102,14 @@ module ClaudeAgentSDK
         end
       end
     end
+
+    def each_response(&block)
+      enum = receive_response
+      return enum unless block
+
+      enum.each(&block)
+    end
+    alias responses each_response
 
     def query(prompt, session_id: "default")
       ensure_connected!
@@ -97,7 +128,11 @@ module ClaudeAgentSDK
           @transport.write(msg.to_json + "\n")
         end
       end
+
+      self
     end
+    alias ask query
+    alias send_message query
 
     def interrupt
       ensure_connected!
@@ -129,13 +164,13 @@ module ClaudeAgentSDK
       @query = nil
       @transport = nil
     end
+    alias close disconnect
 
-    def with
-      connect
-      yield self
-    ensure
-      disconnect
+    def connected?
+      !@query.nil?
     end
+
+    alias with open
 
     private
 

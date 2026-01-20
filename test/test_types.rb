@@ -65,12 +65,20 @@ class TestTypes < Minitest::Test
   end
 
   def test_claude_agent_options_with
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new(system_prompt: "a", max_turns: 1)
+    options = ClaudeAgentSDK::Options.new(system_prompt: "a", max_turns: 1)
     updated = options.with(system_prompt: "b", max_turns: 2)
 
     assert_equal "a", options.system_prompt
     assert_equal 1, options.max_turns
     assert_equal "b", updated.system_prompt
     assert_equal 2, updated.max_turns
+  end
+
+  def test_claude_agent_options_merge_hash
+    options = ClaudeAgentSDK::Options.new(system_prompt: "a", max_turns: 1)
+    updated = options.merge({ system_prompt: "c", max_turns: 3 })
+
+    assert_equal "c", updated.system_prompt
+    assert_equal 3, updated.max_turns
   end
 end

@@ -134,7 +134,7 @@ module ClaudeAgentSDK
         Enumerator.new do |yielder|
           raise CLIConnectionError, "Not connected" unless @stdout && @wait_thread
 
-          json_buffer = ""
+        json_buffer = +""
 
           begin
             @stdout.each_line do |line|
@@ -490,7 +490,7 @@ module ClaudeAgentSDK
       def version_lt?(current, minimum)
         current_parts = current.split(".").map(&:to_i)
         minimum_parts = minimum.split(".").map(&:to_i)
-        current_parts < minimum_parts
+        (current_parts <=> minimum_parts) == -1
       end
     end
   end

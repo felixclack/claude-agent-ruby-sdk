@@ -18,22 +18,31 @@ gem install claude-agent-sdk
 ```ruby
 require "claude_agent_sdk"
 
-ClaudeAgentSDK.query(prompt: "What is 2 + 2?").each do |message|
+ClaudeAgentSDK.query("What is 2 + 2?").each do |message|
   puts message.inspect
 end
 ```
 
 ## Basic Usage: `query`
 
-`ClaudeAgentSDK.query` returns an `Enumerator` of message objects.
+`ClaudeAgentSDK.query` returns an `Enumerator` of message objects and also
+accepts a block.
 
 ```ruby
-options = ClaudeAgentSDK::ClaudeAgentOptions.new(
+options = ClaudeAgentSDK::Options.new(
   system_prompt: "You are a helpful assistant",
   max_turns: 1,
 )
 
-ClaudeAgentSDK.query(prompt: "Tell me a joke", options: options).each do |message|
+ClaudeAgentSDK.query("Tell me a joke", options: options).each do |message|
+  puts message.inspect
+end
+```
+
+Or with a block:
+
+```ruby
+ClaudeAgentSDK.query("Tell me a joke", options: options) do |message|
   puts message.inspect
 end
 ```
@@ -58,25 +67,18 @@ end
 `ClaudeSDKClient` supports bidirectional conversations, interrupts, and hooks.
 
 ```ruby
-client = ClaudeAgentSDK::ClaudeSDKClient.new
-client.connect
-
-client.query("Hello Claude")
-client.receive_response.each do |message|
-  puts message.inspect
+ClaudeAgentSDK::Client.new.open do |client|
+  client.query("Hello Claude")
+  client.each_response { |message| puts message.inspect }
 end
-
-client.disconnect
 ```
 
-Or using a convenience block:
+Or using module-level `open`:
 
 ```ruby
-ClaudeAgentSDK::ClaudeSDKClient.new.with do |client|
+ClaudeAgentSDK.open do |client|
   client.query("Hello")
-  client.receive_response.each do |message|
-    puts message.inspect
-  end
+  client.each_response { |message| puts message.inspect }
 end
 ```
 
@@ -98,12 +100,12 @@ server = ClaudeAgentSDK.create_sdk_mcp_server(
   tools: [greet],
 )
 
-options = ClaudeAgentSDK::ClaudeAgentOptions.new(
+options = ClaudeAgentSDK::Options.new(
   mcp_servers: { "tools" => server },
   allowed_tools: ["mcp__tools__greet"],
 )
 
-ClaudeAgentSDK::ClaudeSDKClient.new(options: options).with do |client|
+ClaudeAgentSDK::Client.new(options: options).open do |client|
   client.query("Greet Alice")
   client.receive_response.each { |msg| puts msg.inspect }
 end
@@ -112,8 +114,8 @@ end
 ## Working Directory
 
 ```ruby
-options = ClaudeAgentSDK::ClaudeAgentOptions.new(cwd: "/path/to/project")
-ClaudeAgentSDK.query(prompt: "List files", options: options).each do |message|
+options = ClaudeAgentSDK::Options.new(cwd: "/path/to/project")
+ClaudeAgentSDK.query("List files", options: options).each do |message|
   puts message.inspect
 end
 ```

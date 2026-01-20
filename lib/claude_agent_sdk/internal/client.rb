@@ -15,7 +15,7 @@ module ClaudeAgentSDK
             raise ArgumentError, "can_use_tool callback cannot be used with permission_prompt_tool_name. Please use one or the other."
           end
 
-          configured_options = options.with(permission_prompt_tool_name: "stdio")
+          configured_options = options.merge(permission_prompt_tool_name: "stdio")
         end
 
         chosen_transport = transport || Transport::SubprocessCLITransport.new(prompt: prompt, options: configured_options)

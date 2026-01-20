@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+ENV["MT_NO_PLUGINS"] = "1"
+ENV["CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK"] = "1"
+
 require "minitest/autorun"
 require "json"
 require "thread"
@@ -7,13 +10,19 @@ require "coverage"
 
 Coverage.start(lines: true)
 
-at_exit do
+Minitest.after_run do
   result = Coverage.result
   lib_root = File.expand_path("../lib", __dir__)
   missed = {}
 
-  result.each do |path, lines|
+  result.each do |path, data|
     next unless path.start_with?(lib_root)
+
+    lines = if data.is_a?(Hash)
+              data[:lines] || data["lines"]
+            else
+              data
+            end
     next unless lines
 
     lines.each_with_index do |count, idx|
@@ -93,7 +102,7 @@ class FakeStdin
   attr_reader :data
 
   def initialize
-    @data = ""
+    @data = +""
     @closed = false
   end
 

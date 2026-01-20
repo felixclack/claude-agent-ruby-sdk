@@ -22,7 +22,7 @@ class TestInternalClient < Minitest::Test
   end
 
   def test_process_query_requires_streaming_for_can_use_tool
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new(can_use_tool: ->(_n, _i, _c) { nil })
+    options = ClaudeAgentSDK::Options.new(can_use_tool: ->(_n, _i, _c) { nil })
     client = ClaudeAgentSDK::Internal::Client.new
 
     error = assert_raises(ArgumentError) do
@@ -32,7 +32,7 @@ class TestInternalClient < Minitest::Test
   end
 
   def test_process_query_requires_permission_prompt_tool_name_exclusive
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new(
+    options = ClaudeAgentSDK::Options.new(
       can_use_tool: ->(_n, _i, _c) { nil },
       permission_prompt_tool_name: "stdio",
     )
@@ -46,7 +46,7 @@ class TestInternalClient < Minitest::Test
 
   def test_process_query_with_string_prompt
     transport = FakeTransport.new(messages: build_messages)
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new
+    options = ClaudeAgentSDK::Options.new
 
     client = ClaudeAgentSDK::Internal::Client.new
     messages = client.process_query(prompt: "hi", options: options, transport: transport).to_a
@@ -71,7 +71,7 @@ class TestInternalClient < Minitest::Test
       end
     end
 
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new
+    options = ClaudeAgentSDK::Options.new
     prompt = [
       { "type" => "user", "message" => { "role" => "user", "content" => "Hello" } },
     ]
@@ -86,5 +86,38 @@ class TestInternalClient < Minitest::Test
 
     assert_equal 2, messages.size
     assert transport.ended
+  end
+
+  def test_process_query_with_can_use_tool_and_sdk_mcp
+    tool = ClaudeAgentSDK.tool("noop", "Noop", { "x" => String }) { |_args| { "content" => [] } }
+    sdk_server = ClaudeAgentSDK.create_sdk_mcp_server(name: "tools", tools: [tool])
+
+    transport = FakeTransport.new(auto_end: false) do |data, fake|
+      request = JSON.parse(data)
+      if request["type"] == "control_request" && request.dig("request", "subtype") == "initialize"
+        fake.push_message({
+          "type" => "control_response",
+          "response" => {
+            "subtype" => "success",
+            "request_id" => request["request_id"],
+            "response" => { "commands" => [] },
+          },
+        })
+      end
+    end
+
+    options = ClaudeAgentSDK::Options.new(
+      can_use_tool: ->(_n, _i, _c) { ClaudeAgentSDK::PermissionResultAllow.new },
+      mcp_servers: { "tools" => sdk_server },
+    )
+    prompt = [{ "type" => "user", "message" => { "role" => "user", "content" => "Hello" } }]
+
+    client = ClaudeAgentSDK::Internal::Client.new
+    enumerator = client.process_query(prompt: prompt, options: options, transport: transport)
+
+    build_messages.each { |msg| transport.push_message(msg) }
+    transport.finish
+
+    assert_equal 2, enumerator.to_a.size
   end
 end

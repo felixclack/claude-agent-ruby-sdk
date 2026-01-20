@@ -210,6 +210,68 @@ class TestInternalQuery < Minitest::Test
     assert_equal "error", response.dig("response", "subtype")
   end
 
+  def test_handle_control_response_error
+    transport = FakeTransport.new
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: transport,
+      is_streaming_mode: true,
+    )
+
+    queue = Queue.new
+    query.instance_variable_get(:@pending_control_responses)["req"] = queue
+
+    query.handle_control_response({
+      "response" => { "request_id" => "req", "subtype" => "error", "error" => "boom" },
+    })
+
+    result = queue.pop
+    assert_instance_of StandardError, result
+  end
+
+  def test_handle_control_request_invalid_permission_result
+    can_use_tool = lambda do |_name, _input, _context|
+      "nope"
+    end
+
+    transport = FakeTransport.new
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: transport,
+      is_streaming_mode: true,
+      can_use_tool: can_use_tool,
+    )
+
+    request = {
+      "request_id" => "req6",
+      "request" => {
+        "subtype" => "can_use_tool",
+        "tool_name" => "Bash",
+        "input" => { "cmd" => "ls" },
+        "permission_suggestions" => [],
+      },
+    }
+
+    query.handle_control_request(request)
+    response = JSON.parse(transport.writes.last)
+    assert_equal "error", response.dig("response", "subtype")
+  end
+
+  def test_handle_control_request_unknown_subtype
+    transport = FakeTransport.new
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: transport,
+      is_streaming_mode: true,
+    )
+
+    request = {
+      "request_id" => "req7",
+      "request" => { "subtype" => "unknown" },
+    }
+
+    query.handle_control_request(request)
+    response = JSON.parse(transport.writes.last)
+    assert_equal "error", response.dig("response", "subtype")
+  end
+
   def test_handle_sdk_mcp_request_variants
     tool = ClaudeAgentSDK.tool("echo", "Echo", { "text" => String }) do |args|
       { "content" => [{ "type" => "text", "text" => args["text"] }] }
@@ -243,6 +305,34 @@ class TestInternalQuery < Minitest::Test
     assert_equal -32_601, missing.dig("error", "code")
   end
 
+  def test_handle_sdk_mcp_request_image_and_error
+    image_tool = ClaudeAgentSDK.tool("snap", "Snap", { "x" => String }) do |_args|
+      { "content" => [{ "type" => "image", "data" => "abc", "mimeType" => "image/png" }] }
+    end
+    error_tool = ClaudeAgentSDK.tool("fail", "Fail", { "x" => String }) do |_args|
+      raise "boom"
+    end
+
+    server = ClaudeAgentSDK::SdkMcpServer.new("media", tools: [image_tool, error_tool])
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: FakeTransport.new,
+      is_streaming_mode: true,
+      sdk_mcp_servers: { "media" => server },
+    )
+
+    image_response = query.handle_sdk_mcp_request(
+      "media",
+      { "id" => 1, "method" => "tools/call", "params" => { "name" => "snap", "arguments" => { "x" => "1" } } },
+    )
+    assert_equal "image", image_response.dig("result", "content").first["type"]
+
+    error_response = query.handle_sdk_mcp_request(
+      "media",
+      { "id" => 2, "method" => "tools/call", "params" => { "name" => "fail", "arguments" => { "x" => "1" } } },
+    )
+    assert_equal -32_603, error_response.dig("error", "code")
+  end
+
   def test_send_control_request_requires_streaming
     query = ClaudeAgentSDK::Internal::Query.new(
       transport: FakeTransport.new,
@@ -253,6 +343,40 @@ class TestInternalQuery < Minitest::Test
       query.send_control_request({ "subtype" => "interrupt" })
     end
     assert_includes error.message, "streaming"
+  end
+
+  def test_send_control_request_timeout
+    transport = FakeTransport.new
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: transport,
+      is_streaming_mode: true,
+    )
+
+    error = assert_raises(StandardError) do
+      query.send_control_request({ "subtype" => "interrupt" }, timeout: 0.01)
+    end
+    assert_includes error.message, "timeout"
+  end
+
+  def test_send_control_request_exception_response
+    transport = FakeTransport.new(auto_end: false)
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: transport,
+      is_streaming_mode: true,
+    )
+
+    transport.instance_variable_set(:@write_handler, lambda do |data, _fake|
+      request = JSON.parse(data)
+      next unless request["type"] == "control_request"
+
+      queue = query.instance_variable_get(:@pending_control_responses)[request["request_id"]]
+      queue << StandardError.new("boom")
+    end)
+
+    error = assert_raises(StandardError) do
+      query.send_control_request({ "subtype" => "interrupt" }, timeout: 0.1)
+    end
+    assert_includes error.message, "boom"
   end
 
   def test_stream_input_ends_input
@@ -298,5 +422,114 @@ class TestInternalQuery < Minitest::Test
 
     query.close
     assert transport.closed
+  end
+
+  def test_stream_input_waits_for_first_result
+    transport = FakeTransport.new
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: transport,
+      is_streaming_mode: true,
+      sdk_mcp_servers: { "tools" => Object.new },
+    )
+
+    stream = [
+      { "type" => "user", "message" => { "role" => "user", "content" => "Hi" } },
+    ]
+
+    thread = Thread.new { query.stream_input(stream) }
+    sleep 0.01
+    query.send(:signal_first_result)
+    thread.join
+
+    assert transport.ended
+  end
+
+  def test_convert_hook_output_for_cli_other_keys
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: FakeTransport.new,
+      is_streaming_mode: true,
+    )
+
+    converted = query.send(:convert_hook_output_for_cli, { foo: "bar" })
+    assert_equal "bar", converted["foo"]
+  end
+
+  def test_fail_pending_control_requests
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: FakeTransport.new,
+      is_streaming_mode: true,
+    )
+
+    queue = Queue.new
+    query.instance_variable_get(:@pending_control_responses)["req"] = queue
+    query.send(:fail_pending_control_requests, StandardError.new("fail"))
+    assert_instance_of StandardError, queue.pop
+  end
+
+  def test_read_messages_control_request_and_cancel
+    can_use_tool = lambda do |_name, _input, _context|
+      ClaudeAgentSDK::PermissionResultAllow.new
+    end
+    transport = FakeTransport.new(auto_end: false)
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: transport,
+      is_streaming_mode: true,
+      can_use_tool: can_use_tool,
+    )
+
+    query.start
+    transport.push_message({
+      "type" => "control_request",
+      "request_id" => "req8",
+      "request" => {
+        "subtype" => "can_use_tool",
+        "tool_name" => "Bash",
+        "input" => {},
+        "permission_suggestions" => [],
+      },
+    })
+    transport.push_message({ "type" => "control_cancel_request" })
+    transport.push_message({
+      "type" => "result",
+      "subtype" => "success",
+      "duration_ms" => 1,
+      "duration_api_ms" => 1,
+      "is_error" => false,
+      "num_turns" => 1,
+      "session_id" => "s1",
+    })
+    transport.finish
+
+    messages = query.receive_messages.to_a
+    assert_equal "result", messages.last["type"]
+    assert transport.writes.any?
+  ensure
+    query.close if query
+  end
+
+  def test_read_messages_handles_error
+    error_transport = Class.new(ClaudeAgentSDK::Transport) do
+      def connect; end
+      def write(_data); end
+      def read_messages
+        Enumerator.new { |_y| raise StandardError, "boom" }
+      end
+      def close; end
+      def ready? = true
+      def end_input; end
+    end
+
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: error_transport.new,
+      is_streaming_mode: true,
+    )
+
+    query.start
+
+    assert_raises(StandardError) do
+      query.receive_messages.each { |_| }
+    end
+  ensure
+    query.close if query
   end
 end

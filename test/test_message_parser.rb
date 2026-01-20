@@ -23,6 +23,18 @@ class TestMessageParser < Minitest::Test
     assert_equal 3, message.content.size
   end
 
+  def test_parse_user_message_with_string_content
+    data = {
+      "type" => "user",
+      "message" => { "content" => "hello" },
+      "uuid" => "u2",
+    }
+
+    message = ClaudeAgentSDK::MessageParser.parse_message(data)
+    assert_instance_of ClaudeAgentSDK::UserMessage, message
+    assert_equal "hello", message.content
+  end
+
   def test_parse_assistant_message
     data = {
       "type" => "assistant",
@@ -87,6 +99,13 @@ class TestMessageParser < Minitest::Test
       ClaudeAgentSDK::MessageParser.parse_message({ "type" => "unknown" })
     end
     assert_includes error.message, "Unknown"
+  end
+
+  def test_missing_required_field
+    error = assert_raises(ClaudeAgentSDK::MessageParseError) do
+      ClaudeAgentSDK::MessageParser.parse_message({ "type" => "assistant" })
+    end
+    assert_includes error.message, "Missing required field"
   end
 
   def test_missing_type

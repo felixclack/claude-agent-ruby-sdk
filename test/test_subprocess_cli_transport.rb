@@ -4,6 +4,7 @@ require_relative "test_helper"
 require "stringio"
 require "open3"
 require "tempfile"
+require "tmpdir"
 
 class TestSubprocessCLITransport < Minitest::Test
   def build_options(overrides = {})
@@ -290,5 +291,295 @@ class TestSubprocessCLITransport < Minitest::Test
 
     assert_equal true, transport.send(:version_lt?, "1.0.0", "2.0.0")
     assert_equal false, transport.send(:version_lt?, "2.1.0", "2.0.0")
+  end
+
+  def test_connect_sets_checkpoint_env
+    options = build_options(enable_file_checkpointing: true, extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    stdin = FakeStdin.new
+    stdout = StringIO.new("")
+    stderr = StringIO.new("")
+    wait_thread = FakeWaitThread.new(exitstatus: 0)
+    captured_env = nil
+
+    Open3.stub(:popen3, proc { |env, *_args, **_opts|
+      captured_env = env
+      [stdin, stdout, stderr, wait_thread]
+    }) do
+      transport.connect
+      assert_equal "true", captured_env["CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"]
+    end
+  end
+
+  def test_connect_user_resolution_sets_uid_gid
+    options = build_options(user: "fake", extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    stdin = FakeStdin.new
+    stdout = StringIO.new("")
+    stderr = StringIO.new("")
+    wait_thread = FakeWaitThread.new(exitstatus: 0)
+    captured_opts = nil
+
+    user_info = Struct.new(:uid, :gid).new(100, 200)
+    Etc.stub(:getpwnam, user_info) do
+      Open3.stub(:popen3, proc { |_env, *_args, **opts|
+        captured_opts = opts
+        [stdin, stdout, stderr, wait_thread]
+      }) do
+        transport.connect
+      end
+    end
+
+    assert_equal 100, captured_opts[:uid]
+    assert_equal 200, captured_opts[:gid]
+  end
+
+  def test_connect_user_resolution_warns_on_error
+    options = build_options(user: "missing", extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    stdin = FakeStdin.new
+    stdout = StringIO.new("")
+    stderr = StringIO.new("")
+    wait_thread = FakeWaitThread.new(exitstatus: 0)
+
+    warnings = []
+    Etc.stub(:getpwnam, proc { raise StandardError }) do
+      transport.stub(:warn, proc { |msg| warnings << msg }) do
+        Open3.stub(:popen3, [stdin, stdout, stderr, wait_thread]) do
+          transport.connect
+        end
+      end
+    end
+
+    assert warnings.any? { |msg| msg.include?("Unable to resolve user") }
+  end
+
+  def test_connect_raises_for_standard_error
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    Open3.stub(:popen3, proc { |_env, *_args, **_opts| raise StandardError, "boom" }) do
+      error = assert_raises(ClaudeAgentSDK::CLIConnectionError) { transport.connect }
+      assert_includes error.message, "Failed to start Claude Code"
+    end
+  end
+
+  def test_write_raises_when_wait_thread_terminated
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: [], options: options)
+
+    terminated_thread = Class.new do
+      def join(_timeout) = true
+      def value = Struct.new(:exitstatus).new(2)
+    end.new
+
+    transport.instance_variable_set(:@ready, true)
+    transport.instance_variable_set(:@stdin, FakeStdin.new)
+    transport.instance_variable_set(:@wait_thread, terminated_thread)
+
+    error = assert_raises(ClaudeAgentSDK::CLIConnectionError) { transport.write("x") }
+    assert_includes error.message, "exit code"
+  end
+
+  def test_write_raises_when_exit_error
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: [], options: options)
+
+    transport.instance_variable_set(:@ready, true)
+    transport.instance_variable_set(:@stdin, FakeStdin.new)
+    transport.instance_variable_set(:@exit_error, ClaudeAgentSDK::CLIConnectionError.new("boom"))
+
+    error = assert_raises(ClaudeAgentSDK::CLIConnectionError) { transport.write("x") }
+    assert_includes error.message, "exited with error"
+  end
+
+  def test_read_messages_partial_json
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    stdin = FakeStdin.new
+    stdout = StringIO.new("{\"type\":")
+    stderr = StringIO.new("")
+    wait_thread = FakeWaitThread.new(exitstatus: 0)
+
+    Open3.stub(:popen3, [stdin, stdout, stderr, wait_thread]) do
+      transport.connect
+      assert_equal [], transport.read_messages.to_a
+    end
+  end
+
+  def test_read_messages_buffer_overflow
+    options = build_options(max_buffer_size: 5, extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    stdin = FakeStdin.new
+    stdout = StringIO.new("{\"type\":\"result\"}\n")
+    stderr = StringIO.new("")
+    wait_thread = FakeWaitThread.new(exitstatus: 0)
+
+    Open3.stub(:popen3, [stdin, stdout, stderr, wait_thread]) do
+      transport.connect
+      assert_raises(ClaudeAgentSDK::CLIJSONDecodeError) { transport.read_messages.to_a }
+    end
+  end
+
+  def test_read_messages_exit_status_error
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    stdin = FakeStdin.new
+    stdout = StringIO.new("")
+    stderr = StringIO.new("")
+    wait_thread = FakeWaitThread.new(exitstatus: 1)
+
+    Open3.stub(:popen3, [stdin, stdout, stderr, wait_thread]) do
+      transport.connect
+      assert_raises(ClaudeAgentSDK::ProcessError) { transport.read_messages.to_a }
+    end
+  end
+
+  def test_close_handles_threads_and_streams
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: [], options: options)
+
+    stdin = FakeStdin.new
+    stdout = StringIO.new("")
+    stderr = StringIO.new("")
+    wait_thread = FakeWaitThread.new(exitstatus: 0)
+
+    Open3.stub(:popen3, [stdin, stdout, stderr, wait_thread]) do
+      transport.connect
+    end
+
+    fake_thread = Class.new do
+      attr_reader :killed
+      def join(_timeout) = true
+      def alive? = true
+      def kill = @killed = true
+    end.new
+
+    transport.instance_variable_set(:@stderr_thread, fake_thread)
+    transport.close
+
+    assert_equal true, fake_thread.killed
+    assert stdin.closed?
+  end
+
+  def test_find_cli_bundled
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    transport.stub(:find_bundled_cli, "/tmp/claude") do
+      assert_equal "/tmp/claude", transport.send(:find_cli)
+    end
+  end
+
+  def test_find_cli_from_path
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    transport.stub(:find_bundled_cli, nil) do
+      transport.stub(:which, "/bin/claude") do
+        assert_equal "/bin/claude", transport.send(:find_cli)
+      end
+    end
+  end
+
+  def test_find_cli_from_locations
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    transport.stub(:find_bundled_cli, nil) do
+      transport.stub(:which, nil) do
+        File.stub(:file?, proc { |path| path.end_with?("claude") }) do
+          assert_includes transport.send(:find_cli), "claude"
+        end
+      end
+    end
+  end
+
+  def test_find_cli_missing
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    transport.stub(:find_bundled_cli, nil) do
+      transport.stub(:which, nil) do
+        File.stub(:file?, false) do
+          assert_raises(ClaudeAgentSDK::CLINotFoundError) { transport.send(:find_cli) }
+        end
+      end
+    end
+  end
+
+  def test_find_bundled_cli
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    File.stub(:file?, true) do
+      assert_includes transport.send(:find_bundled_cli), "claude"
+    end
+  end
+
+  def test_build_settings_value_parse_error_path
+    options = build_options(settings: "{bad}", sandbox: { "enabled" => true })
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    File.stub(:file?, true) do
+      File.stub(:read, JSON.generate({ "x" => 1 })) do
+        settings = transport.send(:build_settings_value)
+        parsed = JSON.parse(settings)
+        assert_equal 1, parsed["x"]
+      end
+    end
+  end
+
+  def test_build_settings_value_missing_file_warns
+    options = build_options(settings: "missing.json", sandbox: { "enabled" => true })
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    warnings = []
+    File.stub(:file?, false) do
+      transport.stub(:warn, proc { |msg| warnings << msg }) do
+        transport.send(:build_settings_value)
+      end
+    end
+
+    assert warnings.any? { |msg| msg.include?("Settings file not found") }
+  end
+
+  def test_normalize_hash_non_hash
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    assert_equal 123, transport.send(:normalize_hash, 123)
+  end
+
+  def test_which_returns_executable
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    dir = Dir.mktmpdir
+    exe = File.join(dir, "claude")
+    File.write(exe, "#!/bin/sh\n")
+    File.chmod(0o755, exe)
+
+    ENV.stub(:fetch, proc { |_key, _default = nil| dir }) do
+      assert_equal exe, transport.send(:which, "claude")
+    end
+  ensure
+    File.delete(exe) if exe && File.exist?(exe)
+    Dir.rmdir(dir) if dir && Dir.exist?(dir)
+  end
+
+  def test_check_claude_version_handles_error
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    Open3.stub(:capture3, proc { raise StandardError }) do
+      assert_nil transport.send(:check_claude_version)
+    end
   end
 end

@@ -35,12 +35,25 @@ class TestMcp < Minitest::Test
     assert_equal schema, result
   end
 
+  def test_schema_for_symbol_keys
+    schema = { type: "object", properties: { name: { type: "string" } } }
+    result = ClaudeAgentSDK::SdkMcpServer.schema_for(schema)
+    assert_equal "object", result["type"]
+    assert_equal "string", result.dig("properties", "name", "type")
+  end
+
   def test_type_to_json
     assert_equal "string", ClaudeAgentSDK::SdkMcpServer.type_to_json(String)
     assert_equal "integer", ClaudeAgentSDK::SdkMcpServer.type_to_json(Integer)
     assert_equal "number", ClaudeAgentSDK::SdkMcpServer.type_to_json(Float)
     assert_equal "boolean", ClaudeAgentSDK::SdkMcpServer.type_to_json(true)
+    assert_equal "boolean", ClaudeAgentSDK::SdkMcpServer.type_to_json(FalseClass)
     assert_equal "string", ClaudeAgentSDK::SdkMcpServer.type_to_json(Object)
+  end
+
+  def test_schema_for_non_hash
+    result = ClaudeAgentSDK::SdkMcpServer.schema_for("string")
+    assert_equal({ "type" => "object", "properties" => {} }, result)
   end
 
   def test_create_sdk_mcp_server

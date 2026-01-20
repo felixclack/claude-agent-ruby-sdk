@@ -51,12 +51,13 @@ module ClaudeAgentSDK
       return {} if input_schema.nil?
 
       if input_schema.is_a?(Hash)
-        if input_schema.key?("type") && input_schema.key?("properties")
-          input_schema
+        schema = normalize_schema_hash(input_schema)
+        if schema.key?("type") && schema.key?("properties")
+          schema
         else
           properties = {}
           input_schema.each do |param_name, param_type|
-            properties[param_name] = { "type" => type_to_json(param_type) }
+            properties[param_name.to_s] = { "type" => type_to_json(param_type) }
           end
           {
             "type" => "object",
@@ -70,17 +71,19 @@ module ClaudeAgentSDK
     end
 
     def self.type_to_json(param_type)
-      case param_type
-      when String, :string
-        "string"
-      when Integer, :integer
-        "integer"
-      when Float, :number
-        "number"
-      when TrueClass, FalseClass, :boolean
-        "boolean"
-      else
-        "string"
+      return "string" if param_type == String || param_type == :string
+      return "integer" if param_type == Integer || param_type == :integer
+      return "number" if param_type == Float || param_type == :number
+      return "boolean" if param_type == true || param_type == false ||
+        param_type == TrueClass || param_type == FalseClass || param_type == :boolean
+
+      "string"
+    end
+
+    def self.normalize_schema_hash(schema)
+      schema.each_with_object({}) do |(key, value), acc|
+        normalized_key = key.to_s
+        acc[normalized_key] = value.is_a?(Hash) ? normalize_schema_hash(value) : value
       end
     end
   end

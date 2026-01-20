@@ -23,15 +23,15 @@ class TestQueryAndClient < Minitest::Test
 
   def test_query_helper
     transport = FakeTransport.new(messages: build_messages)
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new
+    options = ClaudeAgentSDK::Options.new
 
-    messages = ClaudeAgentSDK.query(prompt: "hi", options: options, transport: transport).to_a
+    messages = ClaudeAgentSDK.query("hi", options: options, transport: transport).to_a
     assert_equal 2, messages.size
   end
 
   def test_query_helper_with_block
     transport = FakeTransport.new(messages: build_messages)
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new
+    options = ClaudeAgentSDK::Options.new
     collected = []
 
     ClaudeAgentSDK.query(prompt: "hi", options: options, transport: transport) do |message|
@@ -39,6 +39,10 @@ class TestQueryAndClient < Minitest::Test
     end
 
     assert_equal 2, collected.size
+  end
+
+  def test_query_helper_requires_prompt
+    assert_raises(ArgumentError) { ClaudeAgentSDK.query(nil) }
   end
 
   def test_client_connect_and_query
@@ -56,7 +60,7 @@ class TestQueryAndClient < Minitest::Test
       end
     end
 
-    client = ClaudeAgentSDK::ClaudeSDKClient.new(transport: transport)
+    client = ClaudeAgentSDK::Client.new(transport: transport)
     client.connect
 
     build_messages.each { |msg| transport.push_message(msg) }
@@ -65,10 +69,13 @@ class TestQueryAndClient < Minitest::Test
     client.query("Hello")
     assert_includes transport.writes.last, "Hello"
 
-    response = client.receive_response.to_a
+    response = client.each_response.to_a
     assert_equal 2, response.size
     assert_instance_of ClaudeAgentSDK::ResultMessage, response.last
     assert_equal({ "commands" => [] }, client.get_server_info)
+    assert_equal true, client.connected?
+    client.close
+    assert_equal false, client.connected?
   ensure
     client.disconnect if client
   end
@@ -88,7 +95,7 @@ class TestQueryAndClient < Minitest::Test
       })
     end
 
-    client = ClaudeAgentSDK::ClaudeSDKClient.new(transport: transport)
+    client = ClaudeAgentSDK::Client.new(transport: transport)
     client.connect
 
     client.set_permission_mode("default")
@@ -110,15 +117,16 @@ class TestQueryAndClient < Minitest::Test
   end
 
   def test_client_errors_when_not_connected
-    client = ClaudeAgentSDK::ClaudeSDKClient.new
+    client = ClaudeAgentSDK::Client.new
 
     assert_raises(ClaudeAgentSDK::CLIConnectionError) { client.query("Hi") }
     assert_raises(ClaudeAgentSDK::CLIConnectionError) { client.receive_messages.to_a }
+    assert_raises(ClaudeAgentSDK::CLIConnectionError) { client.each_message.to_a }
   end
 
   def test_client_connect_requires_streaming_for_can_use_tool
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new(can_use_tool: ->(_n, _i, _c) { nil })
-    client = ClaudeAgentSDK::ClaudeSDKClient.new(options: options)
+    options = ClaudeAgentSDK::Options.new(can_use_tool: ->(_n, _i, _c) { nil })
+    client = ClaudeAgentSDK::Client.new(options: options)
 
     error = assert_raises(ArgumentError) do
       client.connect(prompt: "hi")
@@ -127,11 +135,11 @@ class TestQueryAndClient < Minitest::Test
   end
 
   def test_client_connect_requires_permission_prompt_tool_name_exclusive
-    options = ClaudeAgentSDK::ClaudeAgentOptions.new(
+    options = ClaudeAgentSDK::Options.new(
       can_use_tool: ->(_n, _i, _c) { nil },
       permission_prompt_tool_name: "stdio",
     )
-    client = ClaudeAgentSDK::ClaudeSDKClient.new(options: options)
+    client = ClaudeAgentSDK::Client.new(options: options)
 
     error = assert_raises(ArgumentError) do
       client.connect(prompt: [])
@@ -139,7 +147,7 @@ class TestQueryAndClient < Minitest::Test
     assert_includes error.message, "permission_prompt_tool_name"
   end
 
-  def test_client_with_block
+  def test_client_open_block
     transport = FakeTransport.new(auto_end: false) do |data, fake|
       request = JSON.parse(data)
       if request["type"] == "control_request"
@@ -154,9 +162,164 @@ class TestQueryAndClient < Minitest::Test
       end
     end
 
-    client = ClaudeAgentSDK::ClaudeSDKClient.new(transport: transport)
+    client = ClaudeAgentSDK::Client.new(transport: transport)
+    client.open do |instance|
+      assert_same client, instance
+      transport.finish
+    end
+
+    assert transport.closed
+  end
+
+  def test_client_with_alias
+    transport = FakeTransport.new(auto_end: false) do |data, fake|
+      request = JSON.parse(data)
+      if request["type"] == "control_request"
+        fake.push_message({
+          "type" => "control_response",
+          "response" => {
+            "subtype" => "success",
+            "request_id" => request["request_id"],
+            "response" => { "commands" => [] },
+          },
+        })
+      end
+    end
+
+    client = ClaudeAgentSDK::Client.new(transport: transport)
     client.with do |instance|
       assert_same client, instance
+      transport.finish
+    end
+
+    assert transport.closed
+  end
+
+  def test_client_aliases_and_enumerators
+    transport = FakeTransport.new(auto_end: false) do |data, fake|
+      request = JSON.parse(data)
+      if request["type"] == "control_request"
+        fake.push_message({
+          "type" => "control_response",
+          "response" => {
+            "subtype" => "success",
+            "request_id" => request["request_id"],
+            "response" => { "commands" => [] },
+          },
+        })
+      end
+    end
+
+    client = ClaudeAgentSDK::Client.new(transport: transport)
+    client.connect
+
+    build_messages.each { |msg| transport.push_message(msg) }
+    transport.finish
+
+    client.ask("Hello")
+    client.send_message("Hello again")
+
+    assert_kind_of Enumerator, client.messages
+    assert_kind_of Enumerator, client.responses
+
+    assert_equal 2, client.each_message.to_a.size
+  ensure
+    client.disconnect if client
+  end
+
+  def test_client_streaming_prompt_and_blocks
+    tool = ClaudeAgentSDK.tool("noop", "Noop", { "x" => String }) { |_args| { "content" => [] } }
+    sdk_server = ClaudeAgentSDK.create_sdk_mcp_server(name: "tools", tools: [tool])
+
+    transport = FakeTransport.new(auto_end: false) do |data, fake|
+      request = JSON.parse(data)
+      if request["type"] == "control_request"
+        fake.push_message({
+          "type" => "control_response",
+          "response" => {
+            "subtype" => "success",
+            "request_id" => request["request_id"],
+            "response" => { "commands" => [] },
+          },
+        })
+      end
+    end
+
+    options = ClaudeAgentSDK::Options.new(
+      can_use_tool: ->(_n, _i, _c) { ClaudeAgentSDK::PermissionResultAllow.new },
+      mcp_servers: { "tools" => sdk_server },
+    )
+
+    prompt = [{ "type" => "user", "message" => { "role" => "user", "content" => "Ping" } }]
+    client = ClaudeAgentSDK::Client.new(options: options, transport: transport)
+    client.connect(prompt: prompt)
+
+    streamed_prompt = [
+      { "type" => "user", "message" => { "role" => "user", "content" => "Followup" } },
+    ]
+    client.query(streamed_prompt)
+
+    sleep 0.01
+    assert transport.writes.any? { |entry| entry.include?("\"type\":\"user\"") }
+
+    build_messages.each { |msg| transport.push_message(msg) }
+    transport.finish
+
+    seen = []
+    client.each_message { |msg| seen << msg }
+    assert_equal 2, seen.size
+
+    client.disconnect
+
+    transport2 = FakeTransport.new(auto_end: false) do |data, fake|
+      request = JSON.parse(data)
+      if request["type"] == "control_request"
+        fake.push_message({
+          "type" => "control_response",
+          "response" => {
+            "subtype" => "success",
+            "request_id" => request["request_id"],
+            "response" => { "commands" => [] },
+          },
+        })
+      end
+    end
+
+    client2 = ClaudeAgentSDK::Client.new(transport: transport2)
+    client2.connect
+    build_messages.each { |msg| transport2.push_message(msg) }
+    transport2.finish
+
+    response = []
+    client2.each_response { |msg| response << msg }
+    assert_equal 2, response.size
+  ensure
+    client.disconnect if client
+    client2.disconnect if client2
+  end
+
+  def test_module_open_returns_client
+    client = ClaudeAgentSDK.open
+    assert_instance_of ClaudeAgentSDK::Client, client
+  end
+
+  def test_module_open_with_block
+    transport = FakeTransport.new(auto_end: false) do |data, fake|
+      request = JSON.parse(data)
+      if request["type"] == "control_request"
+        fake.push_message({
+          "type" => "control_response",
+          "response" => {
+            "subtype" => "success",
+            "request_id" => request["request_id"],
+            "response" => { "commands" => [] },
+          },
+        })
+      end
+    end
+
+    ClaudeAgentSDK.open(transport: transport) do |client|
+      assert client.connected?
       transport.finish
     end
 

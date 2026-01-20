@@ -229,13 +229,19 @@ module ClaudeAgentSDK
       @enable_file_checkpointing = enable_file_checkpointing
     end
 
-    def with(**overrides)
+    def merge(overrides = nil, **kwargs)
+      updates = {}
+      updates.merge!(overrides) if overrides.is_a?(Hash)
+      updates.merge!(kwargs) if kwargs.any?
+
       duped = dup
-      overrides.each do |key, value|
+      updates.each do |key, value|
         writer = "#{key}="
         duped.public_send(writer, value) if duped.respond_to?(writer)
       end
       duped
     end
+
+    alias with merge
   end
 end

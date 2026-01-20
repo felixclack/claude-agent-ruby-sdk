@@ -14,4 +14,18 @@ require_relative "claude_agent_sdk/query"
 require_relative "claude_agent_sdk/client"
 
 module ClaudeAgentSDK
+  Client = ClaudeSDKClient
+  Options = ClaudeAgentOptions
+
+  def self.open(options: nil, transport: nil, prompt: nil)
+    client = ClaudeSDKClient.new(options: options, transport: transport)
+    return client unless block_given?
+
+    client.connect(prompt: prompt)
+    begin
+      yield client
+    ensure
+      client.disconnect
+    end
+  end
 end
