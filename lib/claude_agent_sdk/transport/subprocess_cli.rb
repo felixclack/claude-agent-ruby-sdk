@@ -450,7 +450,7 @@ module ClaudeAgentSDK
 
       def normalize_hash(value)
         if value.respond_to?(:to_h)
-          value.to_h.transform_keys(&:to_s)
+          value.to_h.transform_keys(&:to_s).reject { |_key, val| val.nil? }
         else
           value
         end

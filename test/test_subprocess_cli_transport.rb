@@ -83,6 +83,17 @@ class TestSubprocessCLITransport < Minitest::Test
     refute mcp_config["mcpServers"]["tools"].key?("instance")
   end
 
+  def test_build_command_with_system_prompt_preset_without_append
+    system_prompt_preset = ClaudeAgentSDK::SystemPromptPreset.new(type: "preset", preset: "claude_code")
+    options = build_options(system_prompt: system_prompt_preset)
+
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+    cmd = transport.send(:build_command)
+
+    refute_includes cmd, "--append-system-prompt"
+    refute_includes cmd, "--system-prompt"
+  end
+
   def test_build_command_with_empty_tools_and_nil_system_prompt
     options = build_options(tools: [], system_prompt: nil, mcp_servers: nil)
     transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
