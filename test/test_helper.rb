@@ -1,0 +1,142 @@
+# frozen_string_literal: true
+
+require "minitest/autorun"
+require "json"
+require "thread"
+require "coverage"
+
+Coverage.start(lines: true)
+
+at_exit do
+  result = Coverage.result
+  lib_root = File.expand_path("../lib", __dir__)
+  missed = {}
+
+  result.each do |path, lines|
+    next unless path.start_with?(lib_root)
+    next unless lines
+
+    lines.each_with_index do |count, idx|
+      next if count.nil?
+      if count.zero?
+        (missed[path] ||= []) << (idx + 1)
+      end
+    end
+  end
+
+  if missed.any?
+    warn "Coverage check failed. Missed lines:"
+    missed.each do |path, lines|
+      warn "#{path}:#{lines.join(',')}"
+    end
+    exit 1
+  end
+end
+
+require_relative "../lib/claude_agent_sdk"
+
+class FakeTransport < ClaudeAgentSDK::Transport
+  attr_reader :writes, :ended, :closed
+
+  def initialize(messages: [], auto_end: true, &write_handler)
+    @incoming = Queue.new
+    messages.each { |msg| @incoming << msg }
+    @auto_end = auto_end
+    finish if auto_end
+    @writes = []
+    @write_handler = write_handler
+    @ready = false
+  end
+
+  def connect
+    @ready = true
+  end
+
+  def write(data)
+    @writes << data
+    @write_handler.call(data, self) if @write_handler
+  end
+
+  def read_messages
+    Enumerator.new do |yielder|
+      loop do
+        msg = @incoming.pop
+        break if msg == :end
+
+        yielder << msg
+      end
+    end
+  end
+
+  def push_message(message)
+    @incoming << message
+  end
+
+  def finish
+    @incoming << :end
+  end
+
+  def end_input
+    @ended = true
+  end
+
+  def close
+    @closed = true
+  end
+
+  def ready?
+    @ready
+  end
+end
+
+class FakeStdin
+  attr_reader :data
+
+  def initialize
+    @data = ""
+    @closed = false
+  end
+
+  def write(value)
+    @data << value
+  end
+
+  def flush; end
+
+  def close
+    @closed = true
+  end
+
+  def closed?
+    @closed
+  end
+
+  def sync=(_value); end
+end
+
+class FakeWaitThread
+  FakeStatus = Struct.new(:exitstatus) do
+    def success?
+      exitstatus == 0
+    end
+  end
+
+  attr_reader :pid
+
+  def initialize(exitstatus: 0)
+    @status = FakeStatus.new(exitstatus)
+    @pid = 12_345
+  end
+
+  def value
+    @status
+  end
+
+  def join(_timeout = nil)
+    nil
+  end
+
+  def alive?
+    false
+  end
+end
