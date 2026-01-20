@@ -330,7 +330,26 @@ class TestInternalQuery < Minitest::Test
       "media",
       { "id" => 2, "method" => "tools/call", "params" => { "name" => "fail", "arguments" => { "x" => "1" } } },
     )
-    assert_equal -32_603, error_response.dig("error", "code")
+    assert_equal true, error_response.dig("result", "is_error")
+    assert_equal "boom", error_response.dig("result", "content", 0, "text")
+  end
+
+  def test_handle_sdk_mcp_request_error_response_on_exception
+    broken_server = Class.new do
+      def list_tools
+        raise "boom"
+      end
+    end.new
+
+    query = ClaudeAgentSDK::Internal::Query.new(
+      transport: FakeTransport.new,
+      is_streaming_mode: true,
+      sdk_mcp_servers: { "broken" => broken_server },
+    )
+
+    response = query.handle_sdk_mcp_request("broken", { "id" => 1, "method" => "tools/list" })
+    assert_equal -32_603, response.dig("error", "code")
+    assert_equal "boom", response.dig("error", "message")
   end
 
   def test_send_control_request_requires_streaming

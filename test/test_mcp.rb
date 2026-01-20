@@ -29,6 +29,18 @@ class TestMcp < Minitest::Test
     assert_includes error.message, "not found"
   end
 
+  def test_tool_error_returns_is_error
+    fail_tool = ClaudeAgentSDK.tool("fail", "Fail", {}) do |_args|
+      raise "boom"
+    end
+
+    server = ClaudeAgentSDK::SdkMcpServer.new("tools", tools: [fail_tool])
+    result = server.call_tool("fail", {})
+
+    assert_equal true, result["is_error"]
+    assert_equal "boom", result.dig("content", 0, "text")
+  end
+
   def test_schema_for_json_schema_passthrough
     schema = { "type" => "object", "properties" => { "x" => { "type" => "string" } } }
     result = ClaudeAgentSDK::SdkMcpServer.schema_for(schema)

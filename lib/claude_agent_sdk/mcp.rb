@@ -44,7 +44,14 @@ module ClaudeAgentSDK
       tool = tool_for(name)
       raise ArgumentError, "Tool '#{name}' not found" unless tool
 
-      tool.handler.call(arguments)
+      begin
+        tool.handler.call(arguments)
+      rescue StandardError => e
+        {
+          "content" => [{ "type" => "text", "text" => e.message }],
+          "is_error" => true,
+        }
+      end
     end
 
     def self.schema_for(input_schema)
