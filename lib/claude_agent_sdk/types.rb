@@ -65,7 +65,11 @@ module ClaudeAgentSDK
     end
   end
 
-  ToolPermissionContext = Struct.new(:signal, :suggestions, keyword_init: true)
+  ToolPermissionContext = Struct.new(:signal, :suggestions, keyword_init: true) do
+    def initialize(signal: nil, suggestions: nil)
+      super(signal: signal, suggestions: suggestions || [])
+    end
+  end
 
   class PermissionResultAllow
     attr_reader :behavior, :updated_input, :updated_permissions

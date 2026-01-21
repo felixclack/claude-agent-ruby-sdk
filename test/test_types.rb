@@ -64,6 +64,12 @@ class TestTypes < Minitest::Test
     assert_equal true, deny.interrupt
   end
 
+  def test_tool_permission_context_defaults
+    context = ClaudeAgentSDK::ToolPermissionContext.new
+    assert_nil context.signal
+    assert_equal [], context.suggestions
+  end
+
   def test_claude_agent_options_with
     options = ClaudeAgentSDK::Options.new(system_prompt: "a", max_turns: 1)
     updated = options.with(system_prompt: "b", max_turns: 2)
