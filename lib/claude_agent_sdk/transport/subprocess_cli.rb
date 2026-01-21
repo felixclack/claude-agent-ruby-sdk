@@ -26,6 +26,7 @@ module ClaudeAgentSDK
         @stderr = nil
         @wait_thread = nil
         @stderr_thread = nil
+        @stderr_forward = nil
 
         @ready = false
         @exit_error = nil
@@ -79,13 +80,10 @@ module ClaudeAgentSDK
           raise @exit_error
         end
 
-        unless should_pipe_stderr
-          @stderr.close if @stderr
-          @stderr = nil
-        end
-
-        if should_pipe_stderr && @stderr
-          @stderr_thread = Thread.new { handle_stderr }
+        if @stderr
+          @stderr_forward = $stderr unless should_pipe_stderr
+          stderr_io = @stderr
+          @stderr_thread = Thread.new { handle_stderr(stderr_io) }
         end
 
         if @is_streaming
@@ -203,6 +201,7 @@ module ClaudeAgentSDK
           @stderr_thread.kill if @stderr_thread.alive?
           @stderr_thread = nil
         end
+        @stderr_forward = nil
 
         if @wait_thread
           begin
@@ -223,8 +222,10 @@ module ClaudeAgentSDK
 
       private
 
-      def handle_stderr
-        @stderr.each_line do |line|
+      def handle_stderr(stderr_io = @stderr)
+        return unless stderr_io
+
+        stderr_io.each_line do |line|
           line_str = line.rstrip
           next if line_str.empty?
 
@@ -233,6 +234,9 @@ module ClaudeAgentSDK
           elsif (@options.extra_args || {}).key?("debug-to-stderr") && @options.debug_stderr
             @options.debug_stderr.write(line_str + "\n")
             @options.debug_stderr.flush if @options.debug_stderr.respond_to?(:flush)
+          elsif @stderr_forward
+            @stderr_forward.write(line_str + "\n")
+            @stderr_forward.flush if @stderr_forward.respond_to?(:flush)
           end
         end
       rescue IOError

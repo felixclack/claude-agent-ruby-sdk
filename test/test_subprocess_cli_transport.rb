@@ -225,6 +225,18 @@ class TestSubprocessCLITransport < Minitest::Test
     assert_includes buffer.string, "debug"
   end
 
+  def test_handle_stderr_falls_back_to_forward
+    buffer = StringIO.new
+    options = build_options(stderr: nil, debug_stderr: nil, extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    transport.instance_variable_set(:@stderr, StringIO.new("note\n"))
+    transport.instance_variable_set(:@stderr_forward, buffer)
+    transport.send(:handle_stderr)
+
+    assert_includes buffer.string, "note"
+  end
+
   def test_connect_write_read_and_close
     options = build_options(extra_args: {})
     transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
