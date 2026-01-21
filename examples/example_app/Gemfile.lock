@@ -1,0 +1,18 @@
+PATH
+  remote: ../..
+  specs:
+    claude-agent-sdk (0.1.20)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+
+PLATFORMS
+  arm64-darwin-23
+  ruby
+
+DEPENDENCIES
+  claude-agent-sdk!
+
+BUNDLED WITH
+   2.5.22
