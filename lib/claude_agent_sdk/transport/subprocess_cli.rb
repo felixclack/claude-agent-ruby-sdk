@@ -79,6 +79,9 @@ module ClaudeAgentSDK
           raise @exit_error
         end
 
+        @stdout.binmode if @stdout && @stdout.respond_to?(:binmode)
+        @stderr.binmode if @stderr && @stderr.respond_to?(:binmode)
+
         if @stderr
           @stderr_forward = $stderr unless should_pipe_stderr
           stderr_io = @stderr

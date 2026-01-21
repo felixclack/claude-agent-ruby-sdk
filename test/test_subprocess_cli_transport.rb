@@ -262,6 +262,9 @@ class TestSubprocessCLITransport < Minitest::Test
 
     Open3.stub(:popen3, [stdin, stdout, stderr, wait_thread]) do
       transport.connect
+      assert_equal Encoding::ASCII_8BIT, stdout.external_encoding
+      assert_equal Encoding::ASCII_8BIT, stderr.external_encoding
+
       messages = transport.read_messages.to_a
       assert_equal "result", messages.first["type"]
 
