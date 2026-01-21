@@ -4,6 +4,11 @@ ENV["MT_NO_PLUGINS"] = "1"
 ENV["CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK"] = "1"
 
 require "minitest/autorun"
+begin
+  require "minitest/mock"
+rescue LoadError
+  # Minitest 6 no longer ships mock; provide a minimal stub helper below.
+end
 require "json"
 require "thread"
 require "coverage"
@@ -43,6 +48,38 @@ Minitest.after_run do
 end
 
 require_relative "../lib/claude_agent_sdk"
+
+unless Object.method_defined?(:stub)
+  class Object
+    def stub(method_name, new_value, &block)
+      eigen = class << self; self; end
+      had_singleton = eigen.method_defined?(method_name) || eigen.private_method_defined?(method_name)
+      original = eigen.instance_method(method_name) if had_singleton
+
+      eigen.define_method(method_name) do |*args, **kwargs, &method_block|
+        if new_value.respond_to?(:call)
+          if kwargs.empty?
+            new_value.call(*args, &method_block)
+          else
+            new_value.call(*args, **kwargs, &method_block)
+          end
+        else
+          new_value
+        end
+      end
+
+      begin
+        block.call
+      ensure
+        if had_singleton
+          eigen.define_method(method_name, original)
+        else
+          eigen.send(:remove_method, method_name)
+        end
+      end
+    end
+  end
+end
 
 class FakeTransport < ClaudeAgentSDK::Transport
   attr_reader :writes, :ended, :closed

@@ -3,7 +3,6 @@
 require "json"
 require "open3"
 require "tempfile"
-require "timeout"
 require "rbconfig"
 require "etc"
 
@@ -474,9 +473,18 @@ module ClaudeAgentSDK
       def check_claude_version
         output = nil
         begin
-          Timeout.timeout(2) do
-            stdout, _stderr, _status = Open3.capture3(@cli_path.to_s, "-v")
-            output = stdout.strip
+          Open3.popen2e(@cli_path.to_s, "-v") do |stdin, stdout, wait_thread|
+            stdin.close
+            if wait_thread.join(2)
+              begin
+                output = stdout.read.to_s.strip
+              rescue IOError
+                return
+              end
+            else
+              terminate_process(wait_thread)
+              return
+            end
           end
         rescue StandardError
           return
@@ -492,6 +500,25 @@ module ClaudeAgentSDK
                     "Some features may not work correctly."
           warn(warning)
         end
+      end
+
+      def terminate_process(wait_thread)
+        pid = wait_thread.pid
+        begin
+          Process.kill("TERM", pid)
+        rescue StandardError
+          return
+        end
+
+        wait_thread.join(0.2)
+        return unless wait_thread.alive?
+
+        begin
+          Process.kill("KILL", pid)
+        rescue StandardError
+          # ignore
+        end
+        wait_thread.join(0.2)
       end
 
       def version_lt?(current, minimum)

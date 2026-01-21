@@ -194,7 +194,21 @@ class TestSubprocessCLITransport < Minitest::Test
     original_stderr = $stderr
     $stderr = stderr
 
-    Open3.stub(:capture3, ["1.0.0\n", "", Object.new]) do
+    wait_thread = Struct.new(:pid) do
+      def join(_timeout = nil)
+        self
+      end
+
+      def alive?
+        false
+      end
+    end.new(12_345)
+
+    Open3.stub(:popen2e, proc { |_cmd, _arg, &block|
+      stdin = StringIO.new
+      stdout = StringIO.new("1.0.0\n")
+      block.call(stdin, stdout, wait_thread)
+    }) do
       transport.send(:check_claude_version)
     end
 
@@ -619,8 +633,89 @@ class TestSubprocessCLITransport < Minitest::Test
     options = build_options(extra_args: {})
     transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
 
-    Open3.stub(:capture3, proc { raise StandardError }) do
+    Open3.stub(:popen2e, proc { raise StandardError }) do
       assert_nil transport.send(:check_claude_version)
+    end
+  end
+
+  def test_check_claude_version_handles_read_error
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    wait_thread = Struct.new(:pid) do
+      def join(_timeout = nil)
+        self
+      end
+
+      def alive?
+        false
+      end
+    end.new(123)
+
+    stdout = Object.new
+    def stdout.read
+      raise IOError
+    end
+
+    Open3.stub(:popen2e, proc { |_cmd, _arg, &block|
+      stdin = StringIO.new
+      block.call(stdin, stdout, wait_thread)
+    }) do
+      assert_nil transport.send(:check_claude_version)
+    end
+  end
+
+  def test_check_claude_version_timeout_kills_process
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    wait_thread = Class.new do
+      attr_reader :pid
+
+      def initialize
+        @pid = 9876
+      end
+
+      def join(_timeout = nil)
+        nil
+      end
+
+      def alive?
+        true
+      end
+    end.new
+
+    kills = []
+    Process.stub(:kill, proc { |signal, pid| kills << [signal, pid] }) do
+      Open3.stub(:popen2e, proc { |_cmd, _arg, &block|
+        stdin = StringIO.new
+        stdout = StringIO.new
+        block.call(stdin, stdout, wait_thread)
+      }) do
+        assert_nil transport.send(:check_claude_version)
+      end
+    end
+
+    assert_includes kills, ["TERM", 9876]
+    assert_includes kills, ["KILL", 9876]
+  end
+
+  def test_terminate_process_handles_kill_error
+    options = build_options(extra_args: {})
+    transport = ClaudeAgentSDK::Transport::SubprocessCLITransport.new(prompt: "hi", options: options)
+
+    wait_thread = Struct.new(:pid) do
+      def join(_timeout = nil)
+        raise "join should not be called"
+      end
+
+      def alive?
+        true
+      end
+    end.new(4321)
+
+    Process.stub(:kill, proc { |_signal, _pid| raise StandardError }) do
+      assert_nil transport.send(:terminate_process, wait_thread)
     end
   end
 end
